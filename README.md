@@ -44,12 +44,12 @@ code ~/dev/shapwgan-ids
 ## Dataset
 
 The corpus is used from a **local working copy on ext4** (`data/raw/`, git-ignored,
-~7.9 GB total). The OneDrive original stays read-only and untouched; point
+8.1 GB / 7.6 GiB total). The OneDrive original stays read-only and untouched; point
 `SHAPWGAN_DATASET__RAW_DIR` (see `.env.example`) back at it if the copy is deleted.
 
 ```
 data/raw/N-BaIoT/              # full corpus: 9 devices, 89 (device, attack) strata,
-                               # 7,062,606 rows x 115 features, ~7.6 GB
+                               # 7,062,606 rows x 115 features, 8.1 GB / 7.6 GiB
 data/raw/N-BaIoT_10Percent/    # 10% sample of devices 1-2, quick iteration
 ```
 
