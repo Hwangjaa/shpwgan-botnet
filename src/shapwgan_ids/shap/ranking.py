@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -40,7 +40,7 @@ def rank_features(importance: Sequence[float], feature_names: Sequence[str]) -> 
     """Descending (feature, importance) ranking; ties broken by name for determinism."""
     if len(importance) != len(feature_names):
         raise ValueError(f"importance ({len(importance)}) and names ({len(feature_names)}) length mismatch")
-    pairs = list(zip(feature_names, (float(v) for v in importance)))
+    pairs = list(zip(feature_names, (float(v) for v in importance), strict=True))
     pairs.sort(key=lambda kv: (-kv[1], kv[0]))
     return pairs
 

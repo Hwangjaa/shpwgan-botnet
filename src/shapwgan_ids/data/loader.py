@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
+import numpy as np
 import pandas as pd
 
 from ..config import Config
@@ -114,12 +115,19 @@ def read_dataset_file(
     frame = pd.read_csv(entry.path, nrows=max_rows, dtype=dtype, engine="c")
     if frame.empty:
         raise ValueError(f"empty dataset file: {entry.path}")
-    frame["device"] = entry.device
-    frame["family"] = entry.family
-    frame["attack"] = entry.attack
-    frame["attack_family"] = entry.attack_family
-    frame["label"] = entry.label
-    return frame
+    # One concat instead of five column inserts: repeated insert() fragments the block
+    # manager and pandas then warns/pays for it on every later operation.
+    meta = pd.DataFrame(
+        {
+            "device": np.full(len(frame), entry.device, dtype="int16"),
+            "family": np.full(len(frame), entry.family, dtype=object),
+            "attack": np.full(len(frame), entry.attack, dtype=object),
+            "attack_family": np.full(len(frame), entry.attack_family, dtype=object),
+            "label": np.full(len(frame), entry.label, dtype="int8"),
+        },
+        index=frame.index,
+    )
+    return pd.concat([frame, meta], axis=1)
 
 
 def build_frame(

@@ -39,7 +39,7 @@ def test_parse_stem_rejects_foreign_names():
 
 
 def test_discover_files_skips_dataset_metadata(synthetic_corpus):
-    cfg, corpus = synthetic_corpus
+    _, corpus = synthetic_corpus
     files = discover_files(corpus)
     assert len(files) == 5
     assert {f.path.name for f in files} == {
@@ -53,10 +53,10 @@ def test_discover_files_skips_dataset_metadata(synthetic_corpus):
 
 
 def test_build_frame_labels_and_feature_count(synthetic_corpus):
-    cfg, corpus = synthetic_corpus
+    _, corpus = synthetic_corpus
     frame = build_frame(discover_files(corpus), validate_features=4)
     assert len(frame) == 200 + 150 + 120 + 60 + 2
-    assert list(frame.columns[-len(META_COLUMNS):]) == list(META_COLUMNS)
+    assert list(frame.columns[-len(META_COLUMNS) :]) == list(META_COLUMNS)
     assert len(iter_feature_columns(frame)) == 4
     assert frame.loc[frame["attack"] == "benign", "label"].eq(0).all()
     assert frame.loc[frame["attack"] == "mirai.syn", "label"].eq(1).all()
@@ -69,13 +69,13 @@ def test_build_frame_labels_and_feature_count(synthetic_corpus):
 
 
 def test_validate_features_mismatch_raises(synthetic_corpus):
-    cfg, corpus = synthetic_corpus
+    _, corpus = synthetic_corpus
     with pytest.raises(ValueError, match="expected 115 feature columns"):
         build_frame(discover_files(corpus), validate_features=115)
 
 
 def test_drop_leaky_duplicates(synthetic_corpus):
-    cfg, corpus = synthetic_corpus
+    _, corpus = synthetic_corpus
     frame = build_frame(discover_files(corpus), validate_features=4)
     doubled = pd.concat([frame, frame], ignore_index=True)
     deduped = drop_leaky_duplicates(doubled)
@@ -92,8 +92,8 @@ def test_load_corpus_caches_then_detects_staleness(synthetic_corpus):
     pd.testing.assert_frame_equal(frame, again)
 
     time.sleep(0.01)
-    with (corpus / "1.benign.csv").open("a") as fh:  # touch source -> new mtime
-        fh.write("")
+    with (corpus / "1.benign.csv").open("a") as fh:  # append -> new mtime/size
+        fh.write("\n")
     assert source_fingerprint(discover_files(corpus)) != manifest.read_text().split('"fingerprint": "')[1][:16]
     rebuilt = load_corpus(cfg, profile="demo")
     assert len(rebuilt) == len(frame)

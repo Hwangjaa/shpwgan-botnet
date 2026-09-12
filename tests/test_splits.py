@@ -10,7 +10,7 @@ from shapwgan_ids.data.splits import leave_one_attack_out, stratified_split
 
 @pytest.fixture
 def frame(synthetic_corpus):
-    cfg, corpus = synthetic_corpus
+    _, corpus = synthetic_corpus
     return build_frame(discover_files(corpus), validate_features=4)
 
 

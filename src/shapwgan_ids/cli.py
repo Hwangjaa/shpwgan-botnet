@@ -16,7 +16,7 @@ from pathlib import Path
 from . import __version__
 from .config import DEFAULT_CONFIG_FILES, load_config
 from .logging_utils import get_logger, setup_logging
-from .paths import CONFIG_DIR, PROJECT_ROOT, dataset_dir, interim_dir
+from .paths import CONFIG_DIR, PROJECT_ROOT, dataset_dir
 
 log = get_logger("swg")
 
@@ -50,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_prep.add_argument("--force", action="store_true", help="ignore a fresh cache and rebuild")
     p_prep.add_argument("--json", type=Path, default=None, help="write the corpus summary as JSON")
 
+    p_report = sub.add_parser("data-report", help="dataset characterisation + split sanity check")
+    p_report.add_argument("--profile", default=None)
+    p_report.add_argument("--force", action="store_true", help="rebuild the cache before reporting")
+    p_report.add_argument("--json", type=Path, default=None, help="write the report as JSON")
+
     for name, (_, description) in ROADMAP_STATUS.items():
         sub.add_parser(name, help=f"[not implemented yet] {description}")
 
@@ -57,8 +62,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _config(args: argparse.Namespace):
-    cfg = load_config(Path(args.config_dir), DEFAULT_CONFIG_FILES, user_config=args.config, dotenv=PROJECT_ROOT / ".env")
-    setup_logging(args.log_level or cfg.get_path("logging.level", "INFO"), cfg.get_path("logging.format", "%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+    cfg = load_config(
+        Path(args.config_dir), DEFAULT_CONFIG_FILES, user_config=args.config, dotenv=PROJECT_ROOT / ".env"
+    )
+    setup_logging(
+        args.log_level or cfg.get_path("logging.level", "INFO"),
+        cfg.get_path("logging.format", "%(asctime)s %(levelname)-7s %(name)s: %(message)s"),
+    )
     return cfg
 
 
@@ -136,7 +146,7 @@ def cmd_info(args: argparse.Namespace, cfg) -> int:
         print("torch          : NOT installed (run: uv sync)")
     print(f"device (config): {report['resolved_device']}   seed: {report['seed']}")
     ds = report["dataset"]
-    print(f"dataset        : profile={ds.get('profile')} every_path_ok={ds.get('exists')}")
+    print(f"dataset        : profile={ds.get('profile')} on_disk={ds.get('exists')}")
     print(f"                 {ds.get('folder')}")
     if ds.get("csv_files"):
         print(f"                 {ds['csv_files']} CSVs, {ds['csv_size_mb']} MB")
@@ -163,6 +173,74 @@ def cmd_prepare_data(args: argparse.Namespace, cfg) -> int:
     return 0
 
 
+def cmd_data_report(args: argparse.Namespace, cfg) -> int:
+    """Dataset characterisation: composition, duplicate flows and split sanity check."""
+    from .data.loader import corpus_summary, iter_feature_columns, load_corpus
+    from .data.splits import leave_one_attack_out, stratified_split
+
+    frame = load_corpus(cfg, profile=args.profile, force=args.force)
+    feats = iter_feature_columns(frame)
+    dup_rows = int(frame.duplicated(subset=feats, keep="first").sum())
+
+    test_size = float(cfg.get_path("splits.test_size", 0.2))
+    val_size = float(cfg.get_path("splits.val_size", 0.1))
+    stratify_by = tuple(cfg.get_path("splits.stratify_by", ["device", "attack"]))
+    seed = int(cfg.get_path("splits.seed", cfg.get_path("seed", 42)))
+
+    parts = stratified_split(frame, test_size=test_size, val_size=val_size, stratify_by=stratify_by, seed=seed)
+    index_sets = [set(p.index) for p in parts.values()]
+    disjoint = not (index_sets[0] & index_sets[1] or index_sets[0] & index_sets[2] or index_sets[1] & index_sets[2])
+    covered = sum(len(p) for p in parts.values()) == len(frame)
+
+    report: dict[str, object] = {
+        **corpus_summary(frame),
+        "duplicate_flows": dup_rows,
+        "duplicate_share_pct": round(100 * dup_rows / max(len(frame), 1), 2),
+        "split": {
+            name: {
+                "rows": len(part),
+                "normal_rows": int((part["label"] == 0).sum()),
+                "attack_rows": int((part["label"] == 1).sum()),
+                "attacks": sorted(part["attack"].unique().tolist()),
+            }
+            for name, part in parts.items()
+        },
+        "split_disjoint": disjoint,
+        "split_covers_all_rows": covered,
+        "split_config": {"test_size": test_size, "val_size": val_size, "stratify_by": list(stratify_by), "seed": seed},
+    }
+
+    holdout = list(cfg.get_path("splits.attack_holdout", []) or [])
+    if holdout:
+        train, test = leave_one_attack_out(frame, holdout, seed=seed)
+        report["leave_one_attack_out"] = {
+            "held_out": holdout,
+            "train_rows": len(train),
+            "test_rows": len(test),
+            "unseen_in_train": sorted(set(test["attack"]) & set(train["attack"]) - set(holdout)),
+        }
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps(report, indent=2))
+
+    print(f"corpus         : {report['rows']} rows x {report['features']} features")
+    print(f"label balance  : normal={report['normal_rows']} attack={report['attack_rows']}")
+    print(f"devices        : {report['devices']}")
+    print(f"duplicate flows: {dup_rows} ({report['duplicate_share_pct']}%) -- drop before splitting")
+    print("attacks:")
+    for name, count in report["attacks"].items():
+        print(f"  {name:<16} {count:>7}")
+    print(f"split          : disjoint={disjoint} covers_all_rows={covered}")
+    for name, part in report["split"].items():
+        print(f"  {name:<5} rows={part['rows']:<7} attacks={part['attack_rows']:<7} kinds={len(part['attacks'])}")
+    if holdout:
+        lo = report["leave_one_attack_out"]
+        print(f"leave-one-out  : held_out={lo['held_out']} train={lo['train_rows']} test={lo['test_rows']}")
+    if args.json:
+        print(f"report written : {args.json}")
+    return 0 if (disjoint and covered) else 1
+
+
 def cmd_not_implemented(args: argparse.Namespace, cfg) -> int:
     step, description = ROADMAP_STATUS[args.command]
     print(f"'{args.command}' is planned for {step}: {description}.")
@@ -178,6 +256,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_info(args, cfg)
     if args.command == "prepare-data":
         return cmd_prepare_data(args, cfg)
+    if args.command == "data-report":
+        return cmd_data_report(args, cfg)
     return cmd_not_implemented(args, cfg)
 
 

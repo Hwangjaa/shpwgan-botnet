@@ -16,9 +16,9 @@ Contract enforced here (and unit-tested in tests/test_mask.py):
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 
@@ -96,7 +96,7 @@ class FeatureMask:
         return path
 
     @classmethod
-    def from_dict(cls, payload: dict) -> "FeatureMask":
+    def from_dict(cls, payload: dict) -> FeatureMask:
         return cls(
             names=tuple(payload["names"]),
             immutable=np.asarray(payload["immutable"], dtype=bool),
@@ -106,7 +106,7 @@ class FeatureMask:
         )
 
     @classmethod
-    def load(cls, path: Path) -> "FeatureMask":
+    def load(cls, path: Path) -> FeatureMask:
         return cls.from_dict(json.loads(Path(path).read_text()))
 
 

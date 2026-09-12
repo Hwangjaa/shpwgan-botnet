@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 import yaml
 
@@ -43,7 +41,9 @@ def test_read_env_file_handles_comments_and_quotes(tmp_path):
 def test_load_config_layer_precedence(tmp_path):
     cfgdir = tmp_path / "configs"
     cfgdir.mkdir()
-    (cfgdir / "default.yaml").write_text(yaml.safe_dump({"seed": 1, "device": "auto", "paths": {"artifacts_dir": "artifacts"}}))
+    (cfgdir / "default.yaml").write_text(
+        yaml.safe_dump({"seed": 1, "device": "auto", "paths": {"artifacts_dir": "artifacts"}})
+    )
     (cfgdir / "data.yaml").write_text(yaml.safe_dump({"dataset": {"raw_dir": "/base"}, "seed": 2}))
     user = tmp_path / "user.yaml"
     user.write_text(yaml.safe_dump({"device": "cpu"}))
