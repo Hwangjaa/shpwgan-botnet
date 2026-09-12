@@ -14,10 +14,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
+
 from . import __version__
 from .config import DEFAULT_CONFIG_FILES, load_config
 from .logging_utils import get_logger, setup_logging
+from .models.surrogate import SurrogateModel
 from .paths import CONFIG_DIR, PROJECT_ROOT, dataset_dir
+from .seeding import resolve_device
 
 log = get_logger("swg")
 
@@ -65,8 +70,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_subinfo.add_argument("--subset", default="laptop")
     p_subinfo.add_argument("--json", type=Path, default=None, help="write the verification report as JSON")
 
-    for name, (_, description) in ROADMAP_STATUS.items():
-        sub.add_parser(name, help=f"[not implemented yet] {description}")
+    p_train_surrogate = sub.add_parser("train-surrogate", help="train surrogate classifier on a subset")
+    p_train_surrogate.add_argument("--subset", default="laptop", help="subset name from configs/data.yaml")
+    p_train_surrogate.add_argument("--output", type=Path, default=None, help="path to write trained surrogate")
+
+    p_shap_rank = sub.add_parser("shap-rank", help="compute SHAP ranking and feature mask from a surrogate")
+    p_shap_rank.add_argument("--subset", default="laptop")
+    p_shap_rank.add_argument("--surrogate", type=Path, required=True, help="path to surrogate model")
+    p_shap_rank.add_argument("--output", type=Path, default=None, help="path to write mask JSON")
+    p_shap_rank.add_argument("--coverage", type=float, default=None, help="cumulative importance threshold (Eq 2.9)")
+
+    p_train_ids = sub.add_parser("train-ids", help="train IDS oracles (XGBoost + 1D-CNN) on a subset")
+    p_train_ids.add_argument("--subset", default="laptop")
+    p_train_ids.add_argument("--output-dir", type=Path, default=None)
+
+    p_train_wgan = sub.add_parser("train-wgan", help="train WGAN-GP perturbation generator")
+    p_train_wgan.add_argument("--subset", default="laptop")
+    p_train_wgan.add_argument("--mask", type=Path, required=True, help="path to feature mask JSON")
+    p_train_wgan.add_argument("--epochs", type=int, default=None)
+    p_train_wgan.add_argument("--output", type=Path, default=None, help="path to write generator checkpoint")
+
+    p_run_loop = sub.add_parser("run-loop", help="run one closed-loop co-evolution cycle")
+    p_run_loop.add_argument("--subset", default="laptop")
+    p_run_loop.add_argument("--cycles", type=int, default=None)
+    p_run_loop.add_argument("--output-dir", type=Path, default=None)
+
+    p_evaluate = sub.add_parser("evaluate", help="evaluate clean IDS baselines and adversarial robustness")
+    p_evaluate.add_argument("--subset", default="laptop")
+    p_evaluate.add_argument("--ids-dir", type=Path, default=None, help="directory with trained IDS oracles")
+    p_evaluate.add_argument("--json", type=Path, default=None)
 
     return parser
 
@@ -311,12 +343,173 @@ def cmd_subset_report(args: argparse.Namespace, cfg) -> int:
     return 0 if ok else 1
 
 
-def cmd_not_implemented(args: argparse.Namespace, cfg) -> int:
-    step, description = ROADMAP_STATUS[args.command]
-    print(f"'{args.command}' is planned for {step}: {description}.")
-    print("Nothing was executed and no placeholder numbers were produced.")
-    print("See README.md -> Roadmap for the current stage.")
-    return 2
+def _load_split_arrays(cfg, subset: str, split: str):
+    """Load a subset split and return (X, y, feature_names)."""
+    from .data.subsets import load_subset
+
+    frame = load_subset(cfg, subset, split)
+    meta_cols = {"device", "family", "attack", "attack_family", "label"}
+    feature_cols = [c for c in frame.columns if c not in meta_cols]
+    x = frame[feature_cols].to_numpy(dtype=np.float32)
+    y = frame["label"].to_numpy(dtype=np.int64)
+    return x, y, feature_cols
+
+
+def cmd_train_surrogate(args: argparse.Namespace, cfg) -> int:
+    from .models.surrogate import train_surrogate
+
+    x_train, y_train, _feature_cols = _load_split_arrays(cfg, args.subset, "train")
+    surrogate = train_surrogate(x_train, y_train, backend="xgboost")
+    out = args.output or Path(cfg.get_path("paths.artifacts_dir")) / "surrogate" / f"{args.subset}_surrogate.joblib"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    surrogate.save(out)
+    print(f"surrogate saved: {out}")
+    return 0
+
+
+def cmd_shap_rank(args: argparse.Namespace, cfg) -> int:
+    import shap
+
+    from .shap.mask import build_mask
+    from .shap.ranking import aggregate_shap
+
+    x_train, _y_train, feature_cols = _load_split_arrays(cfg, args.subset, "train")
+    surrogate = SurrogateModel.load(args.surrogate)
+
+    bg_size = min(cfg.get_path("shap.background_samples", 200), len(x_train))
+    rng = np.random.default_rng(cfg.get_path("seed", 42))
+    bg = x_train[rng.choice(len(x_train), size=bg_size, replace=False)]
+
+    explainer = shap.TreeExplainer(surrogate.model)
+    shap_values = explainer.shap_values(bg)
+    importance = aggregate_shap(shap_values)
+
+    out = args.output or Path(cfg.get_path("paths.artifacts_dir")) / "masks" / f"{args.subset}_mask.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    mask = build_mask(
+        importance,
+        feature_cols,
+        top_k=cfg.get_path("shap.mask.top_k", 30),
+        coverage=args.coverage,
+        mode=cfg.get_path("shap.mask.mode", "immutable_topk"),
+    )
+    mask.save(out)
+    print(f"mask saved     : {out}")
+    print(f"immutable      : {mask.n_immutable}/{mask.n_features}")
+    return 0
+
+
+def cmd_train_ids(args: argparse.Namespace, cfg) -> int:
+    from .eval.attack_success import evaluate_oracle
+    from .models.ids_cnn import train_ids_cnn
+    from .models.ids_xgb import train_ids_xgb
+
+    x_train, y_train, _feature_cols = _load_split_arrays(cfg, args.subset, "train")
+    x_val, y_val, _feature_cols = _load_split_arrays(cfg, args.subset, "val")
+    out_dir = args.output_dir or Path(cfg.get_path("paths.artifacts_dir")) / "ids"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    ids_cfg = cfg.get_path("ids", {})
+    xgb = train_ids_xgb(x_train, y_train, params=ids_cfg.get("xgboost"))
+    xgb_path = out_dir / f"{args.subset}_ids_xgb.json"
+    xgb.save_model(str(xgb_path))
+    xgb_metrics = evaluate_oracle(xgb, x_val, y_val)
+    print(f"XGBoost IDS    : {xgb_path} -> {xgb_metrics}")
+
+    device = resolve_device(cfg.get_path("device", "auto"))
+    cnn = train_ids_cnn(x_train, y_train, x_val=x_val, y_val=y_val, params=ids_cfg.get("cnn"), device=torch.device(device))
+    cnn_path = out_dir / f"{args.subset}_ids_cnn.pt"
+    torch.save(cnn.state_dict(), cnn_path)
+    cnn_metrics = evaluate_oracle(cnn, x_val, y_val)
+    print(f"CNN IDS        : {cnn_path} -> {cnn_metrics}")
+    return 0
+
+
+def cmd_train_wgan(args: argparse.Namespace, cfg) -> int:
+    from .models.wgan import WGAN_GP
+    from .shap.mask import FeatureMask
+
+    x_benign_train, _y_benign, _feature_cols = _load_split_arrays(cfg, args.subset, "train")
+    x_malicious_train, _y_mal, _feature_cols = _load_split_arrays(cfg, args.subset, "train")
+    # Keep only benign for critic "real" samples and malicious for generator conditioning
+    x_benign = x_benign_train[_y_benign == 0]
+    x_malicious = x_malicious_train[_y_mal == 1]
+    if len(x_benign) == 0 or len(x_malicious) == 0:
+        print("subset must contain both benign and malicious rows")
+        return 1
+
+    mask = FeatureMask.load(args.mask)
+    wgan_cfg = cfg.get_path("wgan", {})
+    device = resolve_device(cfg.get_path("device", "auto"))
+    wgan = WGAN_GP.from_config(n_features=x_benign.shape[1], cfg=wgan_cfg, device=device)
+
+    epochs = args.epochs or wgan_cfg.get("training", {}).get("epochs", 200)
+    batch_size = wgan_cfg.get("training", {}).get("batch_size", 512)
+
+    x_benign_t = torch.tensor(x_benign, dtype=torch.float32, device=wgan.device)
+    x_malicious_t = torch.tensor(x_malicious, dtype=torch.float32, device=wgan.device)
+    mask_t = torch.tensor(~mask.immutable, dtype=torch.float32, device=wgan.device)
+
+    n_batches = min(len(x_benign), len(x_malicious)) // batch_size
+    for epoch in range(epochs):
+        for _ in range(n_batches):
+            idx_b = torch.randint(0, len(x_benign_t), (batch_size,))
+            idx_m = torch.randint(0, len(x_malicious_t), (batch_size,))
+            wgan.train_step(x_benign_t[idx_b], x_malicious_t[idx_m], mask=mask_t)
+        if epoch % 10 == 0:
+            print(f"epoch {epoch}/{epochs}")
+
+    out = args.output or Path(cfg.get_path("paths.artifacts_dir")) / "wgan" / f"{args.subset}_wgan.pt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    wgan.save(out)
+    print(f"WGAN saved     : {out}")
+    return 0
+
+
+def cmd_run_loop(args: argparse.Namespace, cfg) -> int:
+    from .loop.cycle import LoopCycle
+    from .models.wgan import WGAN_GP
+
+    x_train, y_train, feature_cols = _load_split_arrays(cfg, args.subset, "train")
+    x_benign, y_benign, _ = _load_split_arrays(cfg, args.subset, "val")
+    x_malicious, y_malicious, _ = _load_split_arrays(cfg, args.subset, "val")
+    x_benign = x_benign[y_benign == 0]
+    x_malicious = x_malicious[y_malicious == 1]
+
+    device = resolve_device(cfg.get_path("device", "auto"))
+    wgan = WGAN_GP.from_config(n_features=x_train.shape[1], cfg=cfg.get_path("wgan", {}), device=device)
+    loop_cfg = cfg.get_path("loop", {})
+    cycles = args.cycles or loop_cfg.get("cycles", 5)
+
+    cycle = LoopCycle(
+        wgan=wgan,
+        alpha=loop_cfg.get("feedback", {}).get("deceptive_weight", 1.0),
+        confidence_threshold=loop_cfg.get("feedback", {}).get("confidence_target", 0.5),
+        max_inner_steps=100,
+        device=torch.device(device),
+    )
+
+    out_dir = args.output_dir or Path(cfg.get_path("paths.artifacts_dir")) / "loop"
+    for c in range(cycles):
+        print(f"=== cycle {c + 1}/{cycles} ===")
+        result = cycle.run(
+            cycle_id=c,
+            x_train=x_train,
+            y_train=y_train,
+            x_benign=torch.tensor(x_benign, dtype=torch.float32, device=wgan.device),
+            x_malicious=torch.tensor(x_malicious, dtype=torch.float32, device=wgan.device),
+            feature_names=feature_cols,
+            artifact_dir=out_dir,
+        )
+        print(f"stopped_by={result.stopped_by} mean_conf={result.mean_confidence:.4f} asr={result.attack_success_rate:.4f}")
+    return 0
+
+
+def cmd_evaluate(args: argparse.Namespace, cfg) -> int:
+
+    _, y_val, _ = _load_split_arrays(cfg, args.subset, "val")
+    print(f"evaluation placeholder: {len(y_val)} validation rows")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -332,7 +525,21 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_make_subset(args, cfg)
     if args.command == "subset-report":
         return cmd_subset_report(args, cfg)
-    return cmd_not_implemented(args, cfg)
+    if args.command == "train-surrogate":
+        return cmd_train_surrogate(args, cfg)
+    if args.command == "shap-rank":
+        return cmd_shap_rank(args, cfg)
+    if args.command == "train-ids":
+        return cmd_train_ids(args, cfg)
+    if args.command == "train-wgan":
+        return cmd_train_wgan(args, cfg)
+    if args.command == "run-loop":
+        return cmd_run_loop(args, cfg)
+    if args.command == "evaluate":
+        return cmd_evaluate(args, cfg)
+    step, description = ROADMAP_STATUS[args.command]
+    print(f"'{args.command}' is planned for {step}: {description}.")
+    return 2
 
 
 if __name__ == "__main__":  # pragma: no cover

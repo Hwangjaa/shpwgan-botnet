@@ -1,6 +1,4 @@
-"""IDS oracles and the WGAN-GP generator.
-
-Planned modules (roadmap step 3-4), kept out of the repo until they are real:
+"""IDS oracles, surrogate classifier, and the WGAN-GP generator.
 
 * ``surrogate.py``  -- black-box approximation of the IDS that provides probabilities
   both for SHAP ranking and for the closed-loop confidence feedback.
@@ -12,4 +10,18 @@ Planned modules (roadmap step 3-4), kept out of the repo until they are real:
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from .ids_cnn import CNNIDS, train_ids_cnn
+from .ids_xgb import train_ids_xgb
+from .surrogate import SurrogateModel, train_surrogate
+from .wgan import WGAN_GP, Critic, Generator
+
+__all__ = [
+    "CNNIDS",
+    "WGAN_GP",
+    "Critic",
+    "Generator",
+    "SurrogateModel",
+    "train_ids_cnn",
+    "train_ids_xgb",
+    "train_surrogate",
+]

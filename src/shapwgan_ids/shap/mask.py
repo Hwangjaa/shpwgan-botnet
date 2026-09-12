@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .ranking import rank_features, top_k_names
+from .ranking import rank_features, top_k_by_cumulative, top_k_names
 
 MODES = ("immutable_topk", "mutable_topk", "none")
 
@@ -66,6 +66,7 @@ class FeatureMask:
     def apply(self, original: np.ndarray, generated: np.ndarray) -> np.ndarray:
         """Blend: generated values on mutable features, original values on immutable ones.
 
+        Useful for ablations; the thesis construction is :meth:`apply_additive`.
         Both inputs are ``(n_samples, n_features)``; a single 1-D vector is accepted and
         returned as 1-D. The result is a new array -- inputs are never mutated in place.
         """
@@ -78,6 +79,23 @@ class FeatureMask:
 
         out = b.copy()
         out[..., self.immutable_idx] = a[..., self.immutable_idx]
+        return out
+
+    def apply_additive(self, original: np.ndarray, perturbation: np.ndarray) -> np.ndarray:
+        """Apply perturbation only on mutable features (Equation 2.16).
+
+        X_adv = X_orig + (epsilon * M) where M_j = 1 for mutable, 0 for immutable.
+        Immutable features stay exactly equal to ``original``.
+        """
+        x_orig = np.asarray(original, dtype=np.float32)
+        delta = np.asarray(perturbation, dtype=np.float32)
+        if x_orig.shape != delta.shape:
+            raise ValueError(f"shape mismatch: original {x_orig.shape} vs perturbation {delta.shape}")
+        if x_orig.shape[-1] != self.n_features:
+            raise ValueError(f"expected {self.n_features} features, got {x_orig.shape[-1]}")
+
+        out = x_orig.copy()
+        out[..., self.mutable_idx] = x_orig[..., self.mutable_idx] + delta[..., self.mutable_idx]
         return out
 
     def to_dict(self) -> dict:
@@ -111,9 +129,10 @@ class FeatureMask:
 
 
 def build_mask(
-    importance: Sequence[float],
+    importance: Sequence[float] | np.ndarray,
     feature_names: Sequence[str],
-    top_k: int = 30,
+    top_k: int | None = 30,
+    coverage: float | None = None,
     mode: str = "immutable_topk",
 ) -> FeatureMask:
     """Build a mask from a per-feature importance vector.
@@ -121,6 +140,9 @@ def build_mask(
     * ``immutable_topk`` -- Top-K features frozen (method default).
     * ``mutable_topk``   -- only Top-K features may move (ablation, inverted budget).
     * ``none``           -- everything mutable (unconstrained baseline).
+
+    If ``coverage`` is given, K is chosen so that C_k >= coverage (Equation 2.9)
+    and ``top_k`` becomes a hard ceiling. Both cannot be omitted.
     """
     if mode not in MODES:
         raise ValueError(f"unknown mask mode {mode!r} (expected one of {MODES})")
@@ -129,7 +151,14 @@ def build_mask(
     if mode == "none":
         return FeatureMask(names=names, immutable=np.zeros(len(names), dtype=bool), mode=mode, top_k=0)
 
-    top = top_k_names(importance, names, top_k)
+    if coverage is not None:
+        k = top_k_by_cumulative(importance, coverage=coverage, max_k=top_k)
+    elif top_k is not None:
+        k = top_k
+    else:
+        raise ValueError("build_mask needs either top_k or coverage")
+
+    top = top_k_names(importance, names, k)
     ranked = tuple(name for name, _ in rank_features(importance, names))
     top_set = set(top)
     select = np.array([name in top_set for name in names], dtype=bool)

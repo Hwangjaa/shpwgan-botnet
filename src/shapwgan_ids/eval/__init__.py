@@ -1,16 +1,12 @@
-"""Evaluation metrics (roadmap step 6).
+"""Evaluation metrics (thesis 3.6.6 + scenario definition).
 
-Planned modules:
-
-* ``realism.py``       -- distributional plausibility of generated flows (feature stats,
-  per-family distances) so "realism" is measured, not asserted.
-* ``attack_success.py``-- attack success rate / evasion rate against each oracle.
-* ``robustness.py``    -- per-cycle robustness curves, clean-vs-generated accuracy drop,
-  leave-one-attack-out generalisation tables.
-
-Output of this package feeds the thesis tables/figures; nothing here may invent numbers.
+* ``realism.py``       -- distributional plausibility of generated flows.
+* ``attack_success.py``-- evasion success rate / detection-rate metrics.
+* ``robustness.py``    -- per-cycle robustness curves and comparison tables.
 """
 
 from __future__ import annotations
 
-__all__: list[str] = []
+from .attack_success import evaluate_oracle, evasion_success_rate
+
+__all__ = ["evaluate_oracle", "evasion_success_rate"]

@@ -1,11 +1,9 @@
-"""Closed-loop co-evolution driver (roadmap step 5).
+"""Closed-loop co-evolution driver (Equations 2.11-2.17).
 
-Planned modules:
-
-* ``cycle.py``   -- one cycle: generate -> query detector -> retrain detector -> recompute
-  SHAP ranking -> adapt generator. Writes per-cycle JSON to ``artifacts/loop/cycles.json``.
-* ``feedback.py``-- turns detector outputs into the confidence/detection-rate signal the
-  generator optimises against (see ``loop.feedback`` in configs/loop.yaml).
+* ``feedback.py`` -- turns detector outputs into the confidence/detection-rate
+  signal the generator optimises against (Equations 2.12-2.13).
+* ``cycle.py``   -- one cycle: generate -> query detector -> retrain detector ->
+  recompute SHAP ranking -> adapt generator (Equations 2.14, 2.17).
 * ``budget.py``  -- perturbation budgets (L2/linf ratios) enforced on top of the mask.
 """
 
