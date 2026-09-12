@@ -1,0 +1,35 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "swg: info",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "shapwgan_ids.cli",
+      "args": ["info"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "swg: prepare-data (sampled)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "shapwgan_ids.cli",
+      "args": ["prepare-data", "--profile", "sampled"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": true
+    },
+    {
+      "name": "pytest: current file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q", "${file}"],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "justMyCode": false
+    }
+  ]
+}

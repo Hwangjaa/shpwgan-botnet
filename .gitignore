@@ -1,0 +1,39 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+
+# Caches / tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+
+# Data: never commit datasets or derived caches (they live outside the repo)
+data/raw/
+data/interim/
+data/processed/
+
+# Experiment outputs
+artifacts/
+runs/
+wandb/
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# Local config / secrets
+.env
+*.local.yaml
+
+# Misc
+*.log
+.DS_Store

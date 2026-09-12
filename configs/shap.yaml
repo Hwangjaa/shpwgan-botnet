@@ -1,0 +1,15 @@
+# SHAP-based feature ranking and mutation constraints (thesis 3.6.2).
+shap:
+  # Explainer used to rank features on the surrogate classifier.
+  explainer: tree            # tree | deep | kernel
+  background_samples: 200    # background/global explanation budget
+  explain_samples: 2000      # samples used to aggregate global importance
+
+mask:
+  # Top-K features are treated as immutable (attack-defining / protocol-invariant).
+  top_k: 30                  # K of 115; swept in ablation
+  mode: immutable_topk       # immutable_topk | mutable_topk | none
+  # Optional hard constraints on individual features (min/max after generation).
+  clamp:
+    enabled: true
+    per_feature: {}          # feature_name: [min, max]

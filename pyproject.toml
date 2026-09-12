@@ -1,0 +1,83 @@
+[project]
+name = "shapwgan-ids"
+version = "0.1.0"
+description = "Adaptive SHAP-WGAN closed-loop feedback pipeline for N-BaIoT IDS robustness evaluation"
+readme = "README.md"
+# Pin the interpreter: the project is validated on 3.12 (torch/xgboost wheel coverage).
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "joblib>=1.6.0",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.5",
+    "pyarrow>=25.0.1",
+    "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
+    "shap>=0.52.0",
+    "torch==2.9.1+cu126",
+    "tqdm>=4.70.1",
+    "xgboost>=3.4.1",
+]
+
+[project.scripts]
+swg = "shapwgan_ids.cli:main"
+shapwgan-ids = "shapwgan_ids.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.14",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.8,<0.13.0"]
+build-backend = "uv_build"
+
+# ---------------------------------------------------------------------------
+# uv: torch comes from the CUDA 12.6 wheel index, everything else from PyPI.
+# The index is `explicit` so it is only consulted for the packages listed in
+# [tool.uv.sources]; otherwise uv would try to resolve numpy/pandas there too.
+# ---------------------------------------------------------------------------
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+
+# ---------------------------------------------------------------------------
+# ruff: linter + formatter (also used by the VS Code extension)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+extend-exclude = [".venv", "data", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501",    # line length is handled by the formatter
+    "B008",    # function calls in argument defaults (config pattern)
+    "RUF001",  # ambiguous unicode in docstrings
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["shapwgan_ids"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: touches the real N-BaIoT corpus (deselect with -m 'not slow')",
+    "gpu: requires a CUDA device",
+]

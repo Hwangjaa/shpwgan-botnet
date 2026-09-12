@@ -1,0 +1,23 @@
+# Closed-loop co-evolution driver (thesis 3.6.6 + scenario definition).
+loop:
+  cycles: 5                    # retrain -> adapt -> co-evolve iterations
+  feedback:
+    source: surrogate          # surrogate | oracle
+    signal: [confidence, detection_rate]   # what the generator optimises against
+    confidence_target: 0.5     # push deceptive samples below this detection confidence
+    deceptive_weight: 1.0
+    realism_weight: 0.5        # keep perturbations plausible (distance regulariser)
+    update_mask_every_cycle: true   # re-rank SHAP features after detector retraining
+  detector_retrain:
+    strategy: all_data         # all_data | hardened | balanced
+    hardened_ratio: 0.2        # share of generated samples added to training set
+    freeze_after_cycle: null   # null = retrain every cycle
+  logging:
+    per_cycle_json: artifacts/loop/cycles.json
+    save_generator_every_cycle: true
+
+scenarios:
+  # each scenario = one configuration of (mask mode, K, generator, detector)
+  baseline_clean:      {generator: none,  mask_mode: none,           detector: [xgboost, cnn]}
+  one_shot_shap_wgan:  {generator: wgan,  mask_mode: immutable_topk, detector: [xgboost, cnn], cycles: 1}
+  adaptive_closed_loop: {generator: wgan, mask_mode: immutable_topk, detector: [xgboost, cnn]}

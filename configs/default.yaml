@@ -1,0 +1,12 @@
+# Global runtime settings. Override per experiment with CLI flags or .env
+seed: 42
+device: auto          # auto | cpu | cuda
+deterministic: true   # cudnn.deterministic + fixed seeds (slower, reproducible)
+
+paths:
+  artifacts_dir: artifacts
+  logs_dir: artifacts/logs
+
+logging:
+  level: INFO
+  format: "%(asctime)s %(levelname)-7s %(name)s: %(message)s"

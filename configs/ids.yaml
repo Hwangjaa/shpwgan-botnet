@@ -1,0 +1,29 @@
+# IDS target oracles evaluated for robustness (thesis 3.6.5).
+# Both are trained on clean (or loop-cycle) training data; the generator never sees
+# their gradients -- only their labels at evaluation time (black-box oracle).
+xgboost:
+  n_estimators: 400
+  max_depth: 6
+  learning_rate: 0.1
+  subsample: 0.8
+  colsample_bytree: 0.8
+  tree_method: hist            # hist = CPU, fast enough for 115 features
+  objective: binary:logistic
+  eval_metric: logloss
+
+cnn:
+  conv_channels: [32, 64, 128]
+  kernel_sizes: [5, 5, 3]
+  dropout: 0.3
+  dense_hidden: 128
+  epochs: 30
+  batch_size: 512
+  lr: 0.001
+  weight_decay: 0.0001
+  device: auto
+
+surrogate:
+  # black-box approximation of the IDS used as confidence feedback signal
+  type: xgboost                 # xgboost | mlp | cnn
+  soft_labels: true             # expose probabilities (needed for SHAP + feedback)
+  retrain_every_cycle: true

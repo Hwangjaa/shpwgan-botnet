@@ -1,0 +1,40 @@
+# N-BaIoT ingestion settings.
+dataset:
+  name: N-BaIoT
+  # Dataset source root on the Windows/OneDrive side (read-only).
+  raw_dir: /mnt/c/Users/Hwangja/OneDrive - Bina Nusantara/S2 - Cyber Security/Thesis/Code
+  # Profiles select which subfolder under raw_dir is used.
+  profiles:
+    sampled:
+      subdir: N-BaIoT_10Percent   # 10% sample of devices 1-2, fast iteration
+    full:
+      subdir: Dataset/N-BaIoT     # all 9 devices, ~1.4 GB of CSV
+  default_profile: sampled
+
+  # interim parquet cache (Linux FS) -- rebuilt automatically when source changes
+  interim_dir: data/interim
+  cache_format: parquet
+
+  # row caps for quick smoke runs (null = all rows)
+  max_rows_per_file: null
+
+features:
+  # N-BaIoT flow-statistical feature count (all columns are numeric, no NaN)
+  expected_count: 115
+  dtype: float32
+
+labels:
+  # filename pattern: <device>.<family>.<attack>.csv  |  <device>.<benign>.csv
+  benign_token: benign
+  binary: [normal, attack]
+  # coarse families kept for stratified splits and per-attack reporting
+  families: [benign, mirai, gafgyt]
+
+splits:
+  test_size: 0.2
+  val_size: 0.1
+  stratify_by: [device, attack]
+  seed: 42
+  # hold out entire attack types from IDS training to measure generalisation to
+  # unseen attacks during loop evaluation (leave-one-attack-out).
+  attack_holdout: []      # e.g. [mirai.udpplain]

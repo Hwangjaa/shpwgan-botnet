@@ -1,0 +1,30 @@
+# WGAN-GP perturbation generator (thesis 3.6.3-3.6.4).
+# NOTE: architectural fields only -- training loop lands in step 4 of the roadmap.
+generator:
+  latent_dim: 64
+  hidden_dims: [256, 256, 256]
+  output_activation: tanh      # outputs in normalised space; de-normalise before mask
+  norm: layernorm
+
+critic:
+  hidden_dims: [256, 256, 256]
+  norm: layernorm
+  dropout: 0.0
+
+training:
+  batch_size: 512
+  latent_batch: 256
+  n_critic: 5                  # critic steps per generator step
+  gp_lambda: 10.0              # gradient penalty weight
+  lr: 0.0001
+  betas: [0.5, 0.9]
+  epochs: 200
+  device: auto
+  amp: true                    # mixed precision (6 GB VRAM)
+  checkpoint_every: 10
+
+constraints:
+  # perturbation budget enforced jointly with the SHAP mask
+  mask_config: configs/shap.yaml
+  l2_budget_ratio: 0.10        # ||delta||_2 <= ratio * ||x||_2
+  linf_budget_ratio: 0.05      # per-feature relative cap
