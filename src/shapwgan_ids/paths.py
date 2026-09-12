@@ -55,6 +55,16 @@ def interim_dir(cfg: Config, base: Path | None = None, create: bool = True) -> P
     return ensure_dir(path) if create else path
 
 
+def processed_dir(cfg: Config, base: Path | None = None, create: bool = True) -> Path:
+    """Folder holding materialised subsets (train/val/test parquet)."""
+    path = as_path(cfg.get_path("dataset.processed_dir", "data/processed"), base)
+    return ensure_dir(path) if create else path
+
+
+def subset_dir(cfg: Config, name: str, base: Path | None = None, create: bool = True) -> Path:
+    return processed_dir(cfg, base, create=create) / name
+
+
 def describe_missing_dataset(cfg: Config, base: Path | None = None) -> str:
     """Human-readable diagnosis when the configured dataset folder is absent."""
     raw = raw_data_dir(cfg, base)

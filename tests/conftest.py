@@ -46,6 +46,18 @@ def synthetic_corpus(tmp_path, request):
                 "interim_dir": str(tmp_path / "interim"),
                 "cache_format": "parquet",
                 "max_rows_per_file": None,
+                "processed_dir": str(tmp_path / "processed"),
+                "subsets": {
+                    "demo": {
+                        "profile": "demo",
+                        "per_stratum_cap": 50,
+                        "dedup": True,
+                        "test_size": 0.2,
+                        "val_size": 0.1,
+                        "stratify_by": ["device", "attack"],
+                        "seed": 3,
+                    }
+                },
             },
             "features": {"expected_count": N_FEATURES, "dtype": "float32"},
         }

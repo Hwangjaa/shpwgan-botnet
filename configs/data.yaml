@@ -1,22 +1,58 @@
 # N-BaIoT ingestion settings.
 dataset:
   name: N-BaIoT
-  # Dataset source root on the Windows/OneDrive side (read-only).
-  raw_dir: /mnt/c/Users/Hwangja/OneDrive - Bina Nusantara/S2 - Cyber Security/Thesis/Code
+  # Dataset root. Two options:
+  #   * local working copy inside the repo (default, ext4 -> fast)
+  #   * the read-only OneDrive original, if you have not copied it yet:
+  #     /mnt/c/Users/Hwangja/OneDrive - Bina Nusantara/S2 - Cyber Security/Thesis/Code
+  #     (override with SHAPWGAN_DATASET__RAW_DIR in .env)
+  raw_dir: data/raw
   # Profiles select which subfolder under raw_dir is used.
   profiles:
     sampled:
       subdir: N-BaIoT_10Percent   # 10% sample of devices 1-2, fast iteration
     full:
-      subdir: Dataset/N-BaIoT     # all 9 devices, ~1.4 GB of CSV
-  default_profile: sampled
+      subdir: N-BaIoT             # all 9 devices, 89 strata, ~7.06 M rows
+  default_profile: full
 
-  # interim parquet cache (Linux FS) -- rebuilt automatically when source changes
+  # interim parquet cache of the whole corpus (Linux FS) -- rebuilt when source changes
   interim_dir: data/interim
   cache_format: parquet
 
   # row caps for quick smoke runs (null = all rows)
   max_rows_per_file: null
+
+  # ---------------------------------------------------------------------------
+  # Materialised subsets: laptop-sized, stratified-capped slices of a profile.
+  # `per_stratum_cap` counts *distinct* flow vectors kept per (device, attack)
+  # stratum (N-BaIoT repeats records heavily; see artifacts/data/stratum_uniques.json).
+  # Built by `uv run swg make-subset --subset <name>`; written to
+  # data/processed/<name>/{train,val,test}.parquet + manifest.json.
+  # ---------------------------------------------------------------------------
+  processed_dir: data/processed
+  subsets:
+    # Main working set for the closed loop. 89 strata x up to 4k distinct vectors
+    # -> ~286k rows (~131 MB float32 in RAM), every device and attack kind present.
+    # 18 captures (gafgyt.tcp / gafgyt.udp on all 9 devices) hold < 500 distinct
+    # vectors in the source, so they land below the cap and are reported in the
+    # manifest instead of being padded.
+    laptop:
+      profile: full
+      per_stratum_cap: 4000
+      dedup: true
+      test_size: 0.2
+      val_size: 0.1
+      stratify_by: [device, attack]
+      seed: 42
+    # Tiny slice for unit tests, SHAP debugging and smoke runs (seconds, not minutes).
+    smoke:
+      profile: full
+      per_stratum_cap: 500
+      dedup: true
+      test_size: 0.2
+      val_size: 0.1
+      stratify_by: [device, attack]
+      seed: 42
 
 features:
   # N-BaIoT flow-statistical feature count (all columns are numeric, no NaN)

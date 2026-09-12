@@ -12,6 +12,7 @@ import json
 import platform
 import sys
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .config import DEFAULT_CONFIG_FILES, load_config
@@ -54,6 +55,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_report.add_argument("--profile", default=None)
     p_report.add_argument("--force", action="store_true", help="rebuild the cache before reporting")
     p_report.add_argument("--json", type=Path, default=None, help="write the report as JSON")
+
+    p_subset = sub.add_parser("make-subset", help="materialise a capped subset (train/val/test parquet)")
+    p_subset.add_argument("--subset", default="laptop", help="name from dataset.subsets in configs/data.yaml")
+    p_subset.add_argument("--force", action="store_true", help="rebuild even if the manifest is up to date")
+    p_subset.add_argument("--json", type=Path, default=None, help="write the subset manifest as JSON")
+
+    p_subinfo = sub.add_parser("subset-report", help="show a materialised subset and verify it on disk")
+    p_subinfo.add_argument("--subset", default="laptop")
+    p_subinfo.add_argument("--json", type=Path, default=None, help="write the verification report as JSON")
 
     for name, (_, description) in ROADMAP_STATUS.items():
         sub.add_parser(name, help=f"[not implemented yet] {description}")
@@ -241,6 +251,66 @@ def cmd_data_report(args: argparse.Namespace, cfg) -> int:
     return 0 if (disjoint and covered) else 1
 
 
+def cmd_make_subset(args: argparse.Namespace, cfg) -> int:
+    """Draw a stratified-capped subset of a profile and freeze it as train/val/test parquet."""
+    from .data.subsets import build_subset, subset_summary
+
+    manifest = build_subset(cfg, args.subset, force=args.force)
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps(manifest, indent=2))
+    print(subset_summary(manifest))
+    if args.json:
+        print(f"manifest written: {args.json}")
+    return 0
+
+
+def cmd_subset_report(args: argparse.Namespace, cfg) -> int:
+    """Re-read a subset from disk and check it against its own manifest."""
+    from .data.subsets import load_subset, subset_dir, subset_summary
+
+    folder = subset_dir(cfg, args.subset, create=False)
+    manifest_path = folder / "manifest.json"
+    if not manifest_path.is_file():
+        print(f"subset {args.subset!r} not built yet ({manifest_path} missing).")
+        print(f"run: uv run swg make-subset --subset {args.subset}")
+        return 1
+
+    manifest = json.loads(manifest_path.read_text())
+    print(subset_summary(manifest))
+
+    checks: dict[str, dict[str, Any]] = {}
+    ok = True
+    for split in ("train", "val", "test"):
+        part = load_subset(cfg, args.subset, split)
+        claimed = manifest["frames"][split]["rows"]
+        n_feat = int(sum(1 for c in part.columns if c not in ("device", "family", "attack", "attack_family", "label")))
+        checks[split] = {
+            "rows_on_disk": len(part),
+            "rows_in_manifest": int(claimed),
+            "features": n_feat,
+            "normal": int((part["label"] == 0).sum()),
+            "attack": int((part["label"] == 1).sum()),
+            "devices": sorted(part["device"].astype(int).unique().tolist()),
+            "attack_kinds": int(part["attack"].nunique()),
+        }
+        ok &= len(part) == int(claimed)
+
+    total = sum(c["rows_on_disk"] for c in checks.values())
+    ok &= total == int(manifest["rows_after_dedup"])
+    print(f"verify         : rows_on_disk_total={total} manifest={manifest['rows_after_dedup']} matches={ok}")
+    for split, info in checks.items():
+        print(
+            f"  {split:<5} rows={info['rows_on_disk']:<7} feats={info['features']} "
+            f"normal={info['normal']:<6} attack={info['attack']:<7} devices={len(info['devices'])} kinds={info['attack_kinds']}"
+        )
+    if args.json:
+        Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.json).write_text(json.dumps({"manifest": manifest, "verification": checks, "matches": ok}, indent=2))
+        print(f"report written : {args.json}")
+    return 0 if ok else 1
+
+
 def cmd_not_implemented(args: argparse.Namespace, cfg) -> int:
     step, description = ROADMAP_STATUS[args.command]
     print(f"'{args.command}' is planned for {step}: {description}.")
@@ -258,6 +328,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_prepare_data(args, cfg)
     if args.command == "data-report":
         return cmd_data_report(args, cfg)
+    if args.command == "make-subset":
+        return cmd_make_subset(args, cfg)
+    if args.command == "subset-report":
+        return cmd_subset_report(args, cfg)
     return cmd_not_implemented(args, cfg)
 
 

@@ -43,25 +43,76 @@ code ~/dev/shapwgan-ids
 
 ## Dataset
 
-Raw N-BaIoT CSVs are **not** versioned here. Default location (override in
-`.env` or `configs/data.yaml`):
+The corpus is used from a **local working copy on ext4** (`data/raw/`, git-ignored,
+~7.9 GB total). The OneDrive original stays read-only and untouched; point
+`SHAPWGAN_DATASET__RAW_DIR` (see `.env.example`) back at it if the copy is deleted.
 
 ```
-/mnt/c/Users/Hwangja/OneDrive - Bina Nusantara/S2 - Cyber Security/Thesis/Code/N-BaIoT_10Percent
+data/raw/N-BaIoT/              # full corpus: 9 devices, 89 (device, attack) strata,
+                               # 7,062,606 rows x 115 features, ~7.6 GB
+data/raw/N-BaIoT_10Percent/    # 10% sample of devices 1-2, quick iteration
 ```
 
-`Thesis/Code/Dataset/N-BaIoT` holds the full 9-device corpus (85 CSVs) if the sampled
-subset is not enough. Feature set: 115 flow statistics, one row per 115-dim flow vector,
-label derived from the filename (`<device>.<family>.<attack>.csv`, `benign` = normal).
+Label comes from the filename (`<device>.<family>.<attack>.csv`, `benign` = normal);
+there is no label column. Reading CSVs straight off the OneDrive/9p mount is roughly an
+order of magnitude slower than parquet on ext4, hence the copy + caches.
+
+### Parquet cache (whole profile)
 
 ```bash
-uv run swg prepare-data --profile sampled    # CSV -> parquet cache in data/interim/
-uv run swg prepare-data --profile full       # 9 devices, slower first run
+uv run swg prepare-data --profile full       # 7.06 M rows, slower first run
+uv run swg prepare-data --profile sampled    # N-BaIoT_10Percent
+uv run swg data-report --profile sampled     # composition, duplicates, split sanity
 ```
+
+### Working subsets (what experiments actually train on)
+
+The full corpus is too big for a closed-loop experiment: every cycle retrains the IDS
+oracles and the generator. `make-subset` draws **distinct** flow vectors per
+`(device, attack)` file until `per_stratum_cap` is met, so
+
+* all 9 devices and all 11 attack kinds stay represented (nothing silently disappears),
+* no single stratum can dominate (`mirai.udp` alone is 17% of the raw corpus),
+* the result is reproducible and documented in a manifest with the source fingerprint.
+
+The cap counts *distinct* vectors, not raw rows, because N-BaIoT repeats records
+heavily: 5,215,807 of 7,062,606 rows are unique overall, and some captures are almost a
+single repeated flow (`1.gafgyt.tcp.csv`: 94 distinct vectors in 100,313 rows; one vector
+occurs 92,013 times). Duplicates are dropped **globally** before splitting, which also
+removes vectors shared *between devices* -- otherwise the same flow could be trained on
+from device 1 and tested on from device 6.
+
+| subset | cap (distinct/stratum) | rows kept | train / val / test | RAM (float32) | intended use |
+| --- | --- | --- | --- | --- | --- |
+| `laptop` | 4,000 | 263,441 | 184,408 / 26,344 / 52,689 | 134 MB | main experiments: closed loop, WGAN-GP, SHAP |
+| `smoke` | 500 | 35,537 | 24,875 / 3,554 / 7,108 | 18 MB | unit tests, SHAP debugging, quick smoke runs |
+
+```bash
+uv run swg make-subset --subset laptop       # -> data/processed/laptop/{train,val,test}.parquet
+uv run swg subset-report --subset laptop     # re-read from disk and verify against manifest
+uv run swg make-subset --subset smoke
+make bench-laptop                            # capacity check: XGBoost fit + CNN epoch timings
+```
+
+Every build writes `data/processed/<subset>/manifest.json`: caps, seed, source
+fingerprint, per-stratum draw statistics, row counts per split, and the
+`disjoint_and_complete` invariant. The split is stratified on `(device, attack)`, so each
+partition sees all 9 devices and all 11 kinds.
+
+Two honesty notes carried in the manifest:
+
+* 63 of 89 strata reach the 4,000-vector cap; the other 26 are duplicate-degenerate
+  (`gafgyt.tcp`/`gafgyt.udp` on every device, and `gafgyt.junk`/`gafgyt.scan` on devices
+  6-9). Those two kinds therefore contribute only ~90 rows each to the `laptop` subset
+  (85 and 95 rows) -- enough to remain represented, not enough for per-kind statistics.
+* attack traffic is 86.3% of the subset, matching the real N-BaIoT imbalance; class
+  balancing, if wanted, is a *training-time* decision (weights / resampling), not a
+  property of the frozen subset.
 
 ## Roadmap
 
-1. [x] Repo scaffold: uv env, config layers, data ingestion + parquet cache
+1. [x] Repo scaffold: uv env, config layers, local dataset copy, ingestion + parquet
+       cache, laptop-sized stratified subsets (train/val/test parquet + manifest)
 2. [ ] Surrogate classifier + SHAP feature ranking, Top-K immutable mask
 3. [ ] IDS oracle training (XGBoost, 1D-CNN) + clean baseline metrics
 4. [ ] WGAN-GP perturbation generator with mask constraint
@@ -77,6 +128,9 @@ uv run swg prepare-data --profile full       # 9 devices, slower first run
 ```bash
 uv run swg info                # environment + dataset report
 uv run swg prepare-data        # build parquet cache
+uv run swg make-subset         # materialise the laptop subset (train/val/test parquet)
+uv run swg subset-report        # re-read a built subset from disk and verify
+uv run python scripts/04_bench_subset.py --subset laptop   # capacity check (XGBoost + CNN)
 uv run pytest -q               # fast unit tests
 uv run ruff check . && uv run ruff format --check .
 make help                      # shortcuts
