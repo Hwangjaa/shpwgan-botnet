@@ -94,6 +94,11 @@ uv run swg make-subset --subset smoke
 make bench-laptop                            # capacity check: XGBoost fit + CNN epoch timings
 ```
 
+Measured on this laptop (RTX 3060 6 GB, 16 cores, WSL): parquet load 0.2 s,
+XGBoost 200 trees on 184,408 rows in 3.8 s, 1D-CNN epoch 2-5 s at 625 MB VRAM. One closed
+loop re-fits the oracles several times, so the 263k-row subset leaves a wide margin; VRAM,
+not dataset size, is the binding constraint when the cap is raised.
+
 Every build writes `data/processed/<subset>/manifest.json`: caps, seed, source
 fingerprint, per-stratum draw statistics, row counts per split, and the
 `disjoint_and_complete` invariant. The split is stratified on `(device, attack)`, so each
